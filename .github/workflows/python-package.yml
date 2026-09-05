@@ -1,0 +1,60 @@
+# This workflow will install Python dependencies, run tests and lint with a variety of Python versions
+# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python
+
+name: Python package
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-package:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Locate application source
+        shell: pwsh
+        run: |
+          $requirements = Get-ChildItem -Path $env:GITHUB_WORKSPACE -Filter requirements.txt -File -Recurse | Select-Object -First 1
+          if ($null -eq $requirements) {
+            throw "No requirements.txt was checked out. Commit the application source and requirements.txt to this repository."
+          }
+          $sourceRoot = Split-Path -Parent $requirements.FullName
+          $relativeRoot = [System.IO.Path]::GetRelativePath($env:GITHUB_WORKSPACE, $sourceRoot).Replace('\', '/')
+          if ([string]::IsNullOrWhiteSpace($relativeRoot)) { $relativeRoot = '.' }
+          "APP_SOURCE=$relativeRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r "${{ env.APP_SOURCE }}/requirements.txt" pyinstaller
+
+      - name: Run XMP tests
+        working-directory: ${{ env.APP_SOURCE }}
+        run: python -m unittest discover -s tests -v
+
+      - name: Build portable Windows package
+        run: |
+          python -m PyInstaller --noconfirm --clean --onedir --windowed --name SPS-LUT-Editor --add-data "${{ env.APP_SOURCE }}/assets;assets" "${{ env.APP_SOURCE }}/main.py"
+
+      - name: Upload Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: SPS-LUT-Editor-Windows
+          path: dist/SPS-LUT-Editor
+          if-no-files-found: error
+          retention-days: 30
