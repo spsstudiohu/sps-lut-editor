@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import tempfile
 import unittest
 from pathlib import Path
@@ -103,5 +104,29 @@ class XmpDocumentTests(unittest.TestCase):
             self.assertEqual(doc.look_value("Group", True), "SPS Studio Hungary")
             self.assertEqual(doc.look_value("Amount"), "0")
             self.assertEqual(doc.value("Exposure2012"), original_exposure)
+
+    def test_metadata_template_changes_only_safe_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source=Path(directory)/"source.xmp"; source.write_bytes(SAMPLE); doc=XmpDocument.open(source)
+            changed=doc.apply_metadata_template({"Group":"SPS Studio Hungary", "Copyright / Rights":"Copyright SPS"})
+            self.assertEqual(changed, ["Group", "Copyright / Rights"])
+            self.assertEqual(doc.localized_value("Group"), "SPS Studio Hungary")
+            self.assertEqual(doc.rights_value(), "Copyright SPS")
+            self.assertEqual(doc.value("Exposure2012"), "0.00")
+
+    def test_save_with_backup_preserves_previous_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source=Path(directory)/"source.xmp"; target=Path(directory)/"target.xmp"; source.write_bytes(SAMPLE); target.write_bytes(b"original target")
+            doc=XmpDocument.open(source); doc.set_localized_value("Name", "SPS")
+            backup=doc.save_with_backup(target)
+            self.assertEqual(backup, target.with_suffix(".xmp.bak"))
+            self.assertEqual(backup.read_bytes(), b"original target")
+            self.assertEqual(XmpDocument.open(target).localized_value("Name"), "SPS")
+
+    def test_diagnostics_identifies_missing_required_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source=Path(directory)/"source.xmp"; source.write_bytes(SAMPLE.replace(b' crs:Name="Airy"', b"")); doc=XmpDocument.open(source)
+            self.assertIn("Hiányzik a preset neve.", doc.diagnostics())
+            self.assertIn("Hiányzik a preset UUID azonosítója.", doc.diagnostics())
 
 if __name__ == "__main__": unittest.main()

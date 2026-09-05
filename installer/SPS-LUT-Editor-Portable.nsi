@@ -3,7 +3,6 @@ Unicode True
 
 !define APP_NAME "SPS LUT Editor"
 !define APP_VERSION "0.2.0"
-!define LAUNCHER "Start SPS LUT Editor.cmd"
 
 Name "${APP_NAME} ${APP_VERSION}"
 OutFile "..\release\SPS-LUT-Editor-Setup.exe"
@@ -21,21 +20,12 @@ SetCompressor /SOLID lzma
 
 Section "Install"
   SetOutPath "$INSTDIR"
-  File "..\Start SPS LUT Editor.cmd"
-
-  SetOutPath "$INSTDIR\source"
-  File /r /x "__pycache__" "..\source\*.*"
-
-  SetOutPath "$INSTDIR\.venv"
-  File /r /x "__pycache__" "..\.venv\*.*"
-
-  CreateShortcut "$DESKTOP\SPS LUT Editor.lnk" "$INSTDIR\${LAUNCHER}" "" "$INSTDIR\source\assets\sps-lut-editor.ico" 0
+  File /r "..\dist\SPS-LUT-Editor\*.*"
+  CreateShortcut "$DESKTOP\SPS LUT Editor.lnk" "$INSTDIR\SPS-LUT-Editor.exe" "" "$INSTDIR\SPS-LUT-Editor.exe" 0
   WriteUninstaller "$INSTDIR\Uninstall SPS LUT Editor.exe"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\SPSLUTEditor" "DisplayName" "${APP_NAME}"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\SPSLUTEditor" "DisplayVersion" "${APP_VERSION}"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\SPSLUTEditor" "UninstallString" '"$INSTDIR\Uninstall SPS LUT Editor.exe"'
-  WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\SPSLUTEditor" "NoModify" 1
-  WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\SPSLUTEditor" "NoRepair" 1
 SectionEnd
 
 Section "Uninstall"

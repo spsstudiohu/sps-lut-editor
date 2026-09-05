@@ -8,6 +8,8 @@ Projektirányelvek: [közreműködés](CONTRIBUTING.md), [magatartási kódex](C
 
 GitHubon a `.github/workflows/python-package.yml` Windows futtatón ellenőrzi a teszteket és hordozható alkalmazáscsomagot készít letölthető build-artifactként.
 
+Új kiadás készítéséhez hozz létre és tölts fel egy `v0.2.1` formátumú Git taget. A `Windows release` workflow tesztel, telepítőt és SHA-256 ellenőrzőösszeget készít, majd ezeket GitHub Release-ként publikálja. Az editor a **Súgó → Frissítések keresése** menüben ebből a kiadásból tölti le a frissítést, kizárólag a checksum sikeres ellenőrzése után.
+
 ## Windows gyorsindítás
 
 Kattints duplán a [Start SPS LUT Editor.cmd](<D:\SPS LUT EDITOR\Start SPS LUT Editor.cmd>) fájlra. Első használatkor automatikusan létrehozza a helyi Python-környezetet és telepíti a PySide6 csomagot; ehhez internetkapcsolat szükséges. Az indító a Windows konzolt UTF-8 kódolásra állítja, ezért a telepítés magyar üzenetei és fájlnevei is helyesen jelennek meg.
@@ -30,6 +32,7 @@ python source\main.py
 - `source/` – szerkeszthető Python-forrás, tesztek, képi assetek és függőségek
 - `Start SPS LUT Editor.cmd` – Windows gyorsindító a forráskódos futtatáshoz
 - `installer/` – NSIS telepítőszkript a forráskódos, beépített Python-környezetes telepítéshez
+- `release/` – az elkészült Windows telepítő kiadási fájlja
 
 ## MVP funkciók
 
@@ -45,5 +48,12 @@ python source\main.py
 - RAW profil kijelzés csak olvasható módban; a Camera Profile és Digest nem módosítható a normál szerkesztőből
 - Embedded Look létrehozása Look nélküli presetekhez biztonságos `Amount=0` alapértékkel
 - „Mentés SPS_ előtaggal” művelet: ugyanabban a mappában ment `SPS_eredeti-név.xmp` fájlt, és csak ezt a munkapéldányt írja felül megerősítés után
+- Kötegelt, csak metaadatot érintő szerkesztés külön `SPS_` kiadási mappába mentve
+- Mentés előtti változáslista, XMP-diagnosztika és opcionális `.bak` biztonsági másolat felülíráskor
+- Metaadat-sablon import/export, CSV/JSON presetjelentés, valamint biztonságos kötegelt átnevezési és kiadási másolatkészítés
 
 Az eredeti fájl felülírása nem alapértelmezett: a mentés mindig új fájlt kér.
+
+## Kötegelt műveletek
+
+A **Fájl** menü kötegelt funkciói mindig külön célmappát kérnek, és `SPS_` előtagú munkapéldányt készítenek. A kötegelt metaadat-szerkesztés kizárólag a csoportot, készítőeszközt, process-verziót és jogkezelési adatokat módosíthatja; a képmegjelenítést befolyásoló presetértékeket nem.

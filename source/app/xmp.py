@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import copy
+import json
 from pathlib import Path
+import shutil
 import uuid
 from xml.etree import ElementTree as ET
 
@@ -268,6 +271,74 @@ class XmpDocument:
             Path(target).write_bytes(data)
         except OSError as exc:
             raise XmpError(f"A fájl nem menthető: {exc}") from exc
+
+    def save_with_backup(self, target: str | Path) -> Path | None:
+        """Save and retain one recoverable .bak copy when replacing a file."""
+        target_path = Path(target)
+        backup = None
+        if target_path.exists():
+            backup = target_path.with_suffix(target_path.suffix + ".bak")
+            try:
+                shutil.copy2(target_path, backup)
+            except OSError as exc:
+                raise XmpError(f"Biztonsági másolat nem készíthető: {exc}") from exc
+        self.save_as(target_path)
+        return backup
+
+    def clone(self) -> "XmpDocument":
+        return XmpDocument(self.path, copy.deepcopy(self.root), self.encoding)
+
+    def diagnostics(self) -> list[str]:
+        """Return non-destructive XMP quality checks for the user interface."""
+        issues: list[str] = []
+        if self.description is None:
+            return ["Hiányzik az RDF Description elem."]
+        try:
+            ET.fromstring(self.to_bytes())
+        except ET.ParseError as exc:
+            issues.append(f"Az XML nem érvényes: {exc}")
+        if not self.localized_value("Name"):
+            issues.append("Hiányzik a preset neve.")
+        if not self.value("UUID"):
+            issues.append("Hiányzik a preset UUID azonosítója.")
+        if self.look_description is not None and not self.look_value("UUID"):
+            issues.append("Az Embedded Look nem tartalmaz UUID azonosítót.")
+        return issues
+
+    def metadata_template(self) -> dict[str, str]:
+        """Only non-rendering, user-editable metadata is included in templates."""
+        metadata = self.metadata()
+        return {key: metadata.get(key, "") for key in ("Group", "Creator Tool", "Process Version", "Copyright / Rights")}
+
+    def apply_metadata_template(self, values: dict[str, str]) -> list[str]:
+        changed: list[str] = []
+        if "Group" in values and self.localized_value("Group") != values["Group"]:
+            self.set_localized_value("Group", values["Group"]); changed.append("Group")
+        if "Copyright / Rights" in values and self.rights_value() != values["Copyright / Rights"]:
+            self.set_rights(values["Copyright / Rights"]); changed.append("Copyright / Rights")
+        namespaces = {"Creator Tool": (XMP, "CreatorTool"), "Process Version": (CRS, "ProcessVersion")}
+        for label, (namespace, name) in namespaces.items():
+            if label in values and self.description is not None and self.description.get(f"{{{namespace}}}{name}", "") != values[label]:
+                self.set_attribute(namespace, name, values[label]); changed.append(label)
+        return changed
+
+    @staticmethod
+    def load_template(path: str | Path) -> dict[str, str]:
+        try:
+            payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise XmpError(f"A metaadat-sablon nem olvasható: {exc}") from exc
+        values = payload.get("metadata", payload)
+        if not isinstance(values, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in values.items()):
+            raise XmpError("A metaadat-sablon formátuma hibás.")
+        return values
+
+    def save_template(self, path: str | Path) -> None:
+        payload = {"format": "sps-lut-editor-metadata-template", "version": 1, "metadata": self.metadata_template()}
+        try:
+            Path(path).write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        except OSError as exc:
+            raise XmpError(f"A metaadat-sablon nem menthető: {exc}") from exc
 
     def replace_from_raw(self, raw: str) -> None:
         try:

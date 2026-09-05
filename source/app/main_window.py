@@ -1,18 +1,24 @@
 from __future__ import annotations
 
 import copy
+import csv
+import json
+import os
+import shutil
+import tempfile
 import uuid
 from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
-    QApplication, QDialog, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QInputDialog,
+    QApplication, QCheckBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QInputDialog,
     QLabel, QLineEdit, QMainWindow, QMessageBox, QPushButton, QSplitter, QStackedWidget,
     QScrollArea, QTableWidget, QTableWidgetItem, QTextEdit, QToolBar, QVBoxLayout, QWidget
 )
 
 from app.widgets import NumericControl, SpsLogo, controls_panel
+from app.update import INSTALLER_NAME, UpdateError, download_verified, is_newer, latest_release
 from app.xmp import XmpDocument, XmpError
 
 BASIC = [("Exposure2012", "Exposure", -5, 5, .01, 2), ("Contrast2012", "Contrast", -100, 100, 1, 0),
@@ -25,7 +31,32 @@ HSL_COLORS = ("Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Mag
 HSL = [(f"HueAdjustment{c}", f"{c} Hue", -100, 100, 1, 0) for c in HSL_COLORS] + [(f"SaturationAdjustment{c}", f"{c} Saturation", -100, 100, 1, 0) for c in HSL_COLORS] + [(f"LuminanceAdjustment{c}", f"{c} Luminance", -100, 100, 1, 0) for c in HSL_COLORS]
 DETAIL = [("SharpenRadius", "Sharpen Radius", .5, 3, .1, 1), ("SharpenDetail", "Sharpen Detail", 0, 100, 1, 0), ("SharpenEdgeMasking", "Masking", 0, 100, 1, 0), ("LuminanceSmoothing", "Luminance Noise Reduction", 0, 100, 1, 0), ("ColorNoiseReduction", "Color Noise Reduction", 0, 100, 1, 0)]
 EFFECTS = [("PostCropVignetteAmount", "Post-Crop Vignette", -100, 100, 1, 0), ("GrainAmount", "Grain Amount", 0, 100, 1, 0), ("GrainSize", "Grain Size", 0, 100, 1, 0), ("GrainFrequency", "Grain Roughness", 0, 100, 1, 0)]
-APP_VERSION = "0.1.8"
+APP_VERSION = "0.2.0"
+
+
+class BatchMetadataDialog(QDialog):
+    """Lets users choose only safe, non-rendering metadata for many files."""
+    FIELDS = ("Group", "Creator Tool", "Process Version", "Copyright / Rights")
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Kötegelt metaadat-szerkesztés")
+        layout = QVBoxLayout(self)
+        note = QLabel("Csak metaadatok változnak; a szín- és presetértékek érintetlenek maradnak.")
+        note.setWordWrap(True); layout.addWidget(note)
+        form = QFormLayout(); self.fields = {}
+        for label in self.FIELDS:
+            row = QWidget(); row_layout = QHBoxLayout(row); row_layout.setContentsMargins(0, 0, 0, 0)
+            enabled = QCheckBox("Módosítás"); field = QLineEdit(); field.setEnabled(False)
+            enabled.toggled.connect(field.setEnabled)
+            row_layout.addWidget(enabled); row_layout.addWidget(field, 1)
+            form.addRow(label + ":", row); self.fields[label] = (enabled, field)
+        layout.addLayout(form)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept); buttons.rejected.connect(self.reject); layout.addWidget(buttons)
+
+    def values(self) -> dict[str, str]:
+        return {label: field.text() for label, (enabled, field) in self.fields.items() if enabled.isChecked()}
 
 
 class CompareDialog(QDialog):
@@ -174,13 +205,194 @@ class MainWindow(QMainWindow):
         self.redo_action.setShortcut(QKeySequence.Redo); self.redo_action.triggered.connect(self.redo)
         menu=self.menuBar().addMenu("Fájl"); menu.addAction(self.open_action); menu.addAction(self.save_action); menu.addAction(self.save_sps_action)
         self.save_sps_action.triggered.connect(self.save_with_sps_prefix)
+        menu.addSeparator()
+        batch=QAction("Kötegelt metaadat-szerkesztés…",self); batch.triggered.connect(self.batch_edit); menu.addAction(batch)
+        package=QAction("SPS kiadási csomag exportálása…",self); package.triggered.connect(self.export_package); menu.addAction(package)
+        rename=QAction("Kötegelt átnevezési másolat…",self); rename.triggered.connect(self.batch_rename); menu.addAction(rename)
+        report=QAction("Preset-jelentés exportálása…",self); report.triggered.connect(self.export_report); menu.addAction(report)
+        self.backup_action=QAction(".bak biztonsági másolat felülíráskor",self); self.backup_action.setCheckable(True); self.backup_action.setChecked(True); menu.addAction(self.backup_action)
         edit=self.menuBar().addMenu("Szerkesztés"); edit.addAction(self.undo_action); edit.addAction(self.redo_action)
         reset=QAction("Eredeti értékek visszaállítása",self); reset.triggered.connect(self.restore_original); edit.addAction(reset)
         tools=self.menuBar().addMenu("Eszközök"); compare=QAction("Preset összehasonlítás…",self); compare.triggered.connect(self.compare); tools.addAction(compare)
+        changes=QAction("Mentés előtti változások…",self); changes.triggered.connect(self.show_changes); tools.addAction(changes)
+        diagnose=QAction("XMP diagnosztika…",self); diagnose.triggered.connect(self.show_diagnostics); tools.addAction(diagnose)
+        tools.addSeparator()
+        template_export=QAction("Metaadat-sablon mentése…",self); template_export.triggered.connect(self.export_template); tools.addAction(template_export)
+        template_import=QAction("Metaadat-sablon alkalmazása…",self); template_import.triggered.connect(self.import_template); tools.addAction(template_import)
+        help_menu=self.menuBar().addMenu("Súgó")
+        check_update=QAction("Frissítések keresése…",self); check_update.triggered.connect(self.check_for_updates); help_menu.addAction(check_update)
 
     def select_page(self,index):
         self.pages.setCurrentIndex(index)
         for i,button in enumerate(self.nav_buttons): button.setChecked(i==index)
+
+    def choose_xmp_files(self, title: str) -> list[str]:
+        paths, _ = QFileDialog.getOpenFileNames(self, title, "", "XMP preset (*.xmp)")
+        return paths
+
+    def check_for_updates(self):
+        self.statusBar().showMessage("Frissítések keresése a GitHubon…")
+        QApplication.processEvents()
+        try:
+            release = latest_release()
+            if not is_newer(release.version, APP_VERSION):
+                QMessageBox.information(self, "Frissítések", f"A legújabb verziót használod ({APP_VERSION}).")
+                return
+            details = release.notes.strip() or "Nincs kiadási megjegyzés."
+            answer = QMessageBox.question(self, "Új verzió elérhető", f"Elérhető: {release.version}\nJelenlegi: {APP_VERSION}\n\n{details[:1200]}\n\nLetöltöd az ellenőrzött telepítőt?", QMessageBox.Yes | QMessageBox.No)
+            if answer != QMessageBox.Yes:
+                return
+            target = Path(tempfile.gettempdir()) / INSTALLER_NAME
+            installer = download_verified(release, target)
+            QMessageBox.information(self, "Frissítő letöltve", "A telepítő elindul. A telepítés után indítsd újra az editort.")
+            os.startfile(str(installer))
+        except UpdateError as exc:
+            QMessageBox.warning(self, "Frissítési hiba", str(exc))
+        finally:
+            self.statusBar().showMessage("Készen áll.")
+
+    def show_changes(self):
+        if not self.document or self.original_root is None:
+            return
+        before = XmpDocument(None, copy.deepcopy(self.original_root))
+        changes = []
+        for key in sorted(set(before.crs_values()) | set(self.document.crs_values())):
+            old, new = before.value(key), self.document.value(key)
+            if old != new:
+                changes.append(f"{key}: {old or '—'}  →  {new or '—'}")
+        for label, old, new in (
+            ("Preset Name", before.localized_value("Name"), self.document.localized_value("Name")),
+            ("Group", before.localized_value("Group"), self.document.localized_value("Group")),
+            ("Copyright / Rights", before.rights_value(), self.document.rights_value()),
+        ):
+            if old != new:
+                changes.append(f"{label}: {old or '—'}  →  {new or '—'}")
+        QMessageBox.information(self, "Mentés előtti változások", "Nincs módosítás." if not changes else "\n".join(changes))
+
+    def show_diagnostics(self):
+        if not self.document:
+            return
+        issues = self.document.diagnostics()
+        QMessageBox.information(self, "XMP diagnosztika", "Az XMP szerkezete rendben van." if not issues else "\n".join(f"• {issue}" for issue in issues))
+
+    def export_template(self):
+        if not self.document:
+            return
+        target, _ = QFileDialog.getSaveFileName(self, "Metaadat-sablon mentése", "sps-metadata-template.json", "JSON fájl (*.json)")
+        if not target:
+            return
+        try:
+            self.document.save_template(target)
+            self.statusBar().showMessage(f"Metaadat-sablon mentve: {Path(target).name}")
+        except XmpError as exc:
+            QMessageBox.critical(self, "Sablon mentési hiba", str(exc))
+
+    def import_template(self):
+        if not self.document:
+            return
+        path, _ = QFileDialog.getOpenFileName(self, "Metaadat-sablon megnyitása", "", "JSON fájl (*.json)")
+        if not path:
+            return
+        try:
+            values = XmpDocument.load_template(path)
+            if not values:
+                QMessageBox.information(self, "Sablon", "A sablon nem tartalmaz alkalmazható metaadatot."); return
+            self.snapshot(); changed = self.document.apply_metadata_template(values)
+            if not changed:
+                self.history.pop()
+            self.update_ui(); self.statusBar().showMessage("Sablon alkalmazva: " + (", ".join(changed) if changed else "nincs eltérés"))
+        except XmpError as exc:
+            QMessageBox.critical(self, "Sablon betöltési hiba", str(exc))
+
+    def batch_edit(self):
+        paths = self.choose_xmp_files("XMP presetek kijelölése")
+        if not paths:
+            return
+        dialog = BatchMetadataDialog(self)
+        if dialog.exec() != QDialog.Accepted or not dialog.values():
+            return
+        destination = QFileDialog.getExistingDirectory(self, "Kiadási mappa kiválasztása")
+        if not destination:
+            return
+        values, saved, failures = dialog.values(), [], []
+        for path in paths:
+            try:
+                document = XmpDocument.open(path)
+                document.apply_metadata_template(values)
+                source_name = Path(path).name
+                target = Path(destination) / (source_name if source_name.startswith("SPS_") else f"SPS_{source_name}")
+                document.save_as(target); saved.append(target.name)
+            except XmpError as exc:
+                failures.append(f"{Path(path).name}: {exc}")
+        message = f"{len(saved)} preset elkészült a kiválasztott kiadási mappában."
+        if failures: message += "\n\nNem sikerült:\n" + "\n".join(failures)
+        QMessageBox.information(self, "Kötegelt szerkesztés", message)
+
+    def export_package(self):
+        paths = self.choose_xmp_files("Presetek kiválasztása az SPS csomaghoz")
+        if not paths:
+            return
+        destination = QFileDialog.getExistingDirectory(self, "SPS kiadási mappa")
+        if not destination:
+            return
+        copied, failures = [], []
+        for path in paths:
+            source = Path(path); target = Path(destination) / (source.name if source.name.startswith("SPS_") else f"SPS_{source.name}")
+            try:
+                shutil.copy2(source, target); copied.append(target.name)
+            except OSError as exc:
+                failures.append(f"{source.name}: {exc}")
+        message = f"{len(copied)} változatlan preset került az SPS kiadási mappába."
+        if failures: message += "\n\nNem sikerült:\n" + "\n".join(failures)
+        QMessageBox.information(self, "SPS csomag export", message)
+
+    def batch_rename(self):
+        paths = self.choose_xmp_files("Átnevezendő presetek kiválasztása")
+        if not paths:
+            return
+        find, ok = QInputDialog.getText(self, "Kötegelt átnevezés", "Cserélendő szöveg a fájlnévben:")
+        if not ok:
+            return
+        replacement, ok = QInputDialog.getText(self, "Kötegelt átnevezés", "Új szöveg:")
+        if not ok:
+            return
+        destination = QFileDialog.getExistingDirectory(self, "Új nevű másolatok mappája")
+        if not destination:
+            return
+        copied = 0
+        for path in paths:
+            source = Path(path); name = source.name.replace(find, replacement) if find else source.name
+            target = Path(destination) / (name if name.startswith("SPS_") else f"SPS_{name}")
+            try:
+                shutil.copy2(source, target); copied += 1
+            except OSError as exc:
+                QMessageBox.warning(self, "Átnevezési hiba", f"{source.name}: {exc}")
+        QMessageBox.information(self, "Kötegelt átnevezés", f"{copied} új nevű másolat elkészült. Az eredeti fájlok változatlanok.")
+
+    def export_report(self):
+        paths = self.choose_xmp_files("Presetek kiválasztása a jelentéshez")
+        if not paths:
+            return
+        target, _ = QFileDialog.getSaveFileName(self, "Preset-jelentés mentése", "sps-preset-report.csv", "CSV fájl (*.csv);;JSON fájl (*.json)")
+        if not target:
+            return
+        rows = []
+        for path in paths:
+            try:
+                document = XmpDocument.open(path); metadata = document.metadata()
+                rows.append({"Fájl": Path(path).name, **metadata, "Look": document.look_value("Name"), "Look Group": document.look_value("Group", True)})
+            except XmpError as exc:
+                rows.append({"Fájl": Path(path).name, "Hiba": str(exc)})
+        try:
+            if Path(target).suffix.lower() == ".json":
+                Path(target).write_text(json.dumps(rows, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            else:
+                keys = sorted({key for row in rows for key in row})
+                with Path(target).open("w", encoding="utf-8-sig", newline="") as handle:
+                    writer = csv.DictWriter(handle, fieldnames=keys); writer.writeheader(); writer.writerows(rows)
+            QMessageBox.information(self, "Jelentés elkészült", f"{len(rows)} preset adatai mentve: {Path(target).name}")
+        except OSError as exc:
+            QMessageBox.critical(self, "Jelentés mentési hiba", str(exc))
 
     def open_file(self):
         path,_=QFileDialog.getOpenFileName(self,"XMP preset megnyitása","","XMP preset (*.xmp);;Minden fájl (*)")
@@ -268,7 +480,9 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Mentés folyamatban: XML ellenőrzése…")
         QApplication.processEvents()
         try:
-            self.document.save_as(target); self.statusBar().showMessage(f"Mentve és érvényesítve: {Path(target).name}"); QMessageBox.information(self,"Mentés kész","Az XMP érvényesítve és új fájlként mentve lett.")
+            backup = self.document.save_with_backup(target) if self.backup_action.isChecked() else (self.document.save_as(target) or None)
+            detail = f"\nBiztonsági másolat: {backup.name}" if backup else ""
+            self.statusBar().showMessage(f"Mentve és érvényesítve: {Path(target).name}"); QMessageBox.information(self,"Mentés kész","Az XMP érvényesítve és új fájlként mentve lett." + detail)
         except XmpError as exc: QMessageBox.critical(self,"Mentési hiba",str(exc))
 
     def save_with_sps_prefix(self):
@@ -284,9 +498,10 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("SPS_ fájl mentése és XML ellenőrzése…")
         QApplication.processEvents()
         try:
-            self.document.save_as(target)
+            backup = self.document.save_with_backup(target) if self.backup_action.isChecked() else (self.document.save_as(target) or None)
             self.statusBar().showMessage(f"Mentve: {target.name}")
-            QMessageBox.information(self, "Mentés kész", f"Az új adatok a következő fájlba kerültek:\n{target.name}\n\nAz eredeti fájl változatlan maradt.")
+            backup_note = f"\nBiztonsági másolat: {backup.name}" if backup else ""
+            QMessageBox.information(self, "Mentés kész", f"Az új adatok a következő fájlba kerültek:\n{target.name}\n\nAz eredeti fájl változatlan maradt." + backup_note)
         except XmpError as exc:
             QMessageBox.critical(self, "Mentési hiba", str(exc))
     def compare(self):

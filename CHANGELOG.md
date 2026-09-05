@@ -2,6 +2,20 @@
 
 Minden érdemi változás ebben a fájlban követhető.
 
+## 2026-09-05
+
+### [New]
+
+- Kötegelt, biztonságos metaadat-szerkesztés és `SPS_` kiadási másolatkészítés.
+- Mentés előtti változáslista, XMP-diagnosztika és választható `.bak` biztonsági mentés.
+- Metaadat-sablonok JSON import/exportja, CSV/JSON presetjelentés és kötegelt átnevezési másolat.
+- GitHub Releases-alapú, kézi jóváhagyást és SHA-256 ellenőrzést használó frissítéskereső.
+- Címkével indítható GitHub Actions kiadási folyamat Windows telepítővel és ellenőrzőösszeggel.
+
+### [Updated]
+
+- NSIS telepítő verziója 0.2.0-ra frissítve az új szerkesztőfunkciókkal.
+
 ## 2026-09-04
 
 ### [New]
