@@ -57,3 +57,5 @@ Az eredeti fájl felülírása nem alapértelmezett: a mentés mindig új fájlt
 ## Kötegelt műveletek
 
 A **Fájl** menü kötegelt funkciói mindig külön célmappát kérnek, és `SPS_` előtagú munkapéldányt készítenek. A kötegelt metaadat-szerkesztés kizárólag a csoportot, készítőeszközt, process-verziót és jogkezelési adatokat módosíthatja; a képmegjelenítést befolyásoló presetértékeket nem.
+
+Kötegelt módosítás előtt az editor fájlonként előnézetet mutat. Az export sosem ír felül létező célfájlt: szükség esetén `_01`, `_02` utótagot ad hozzá. A **Súgó → Beállítások** alatt az alapértelmezett kiadási mappa, a `.bak` mentés és az indításkori frissítésellenőrzés is állítható.

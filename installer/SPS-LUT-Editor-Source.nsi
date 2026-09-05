@@ -2,7 +2,7 @@ Unicode True
 !include "MUI2.nsh"
 
 !define APP_NAME "SPS LUT Editor"
-!define APP_VERSION "0.2.0"
+!define APP_VERSION "0.2.1"
 !define LAUNCHER "Start SPS LUT Editor.cmd"
 
 Name "${APP_NAME} ${APP_VERSION}"

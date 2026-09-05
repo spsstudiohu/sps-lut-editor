@@ -9,7 +9,7 @@ import tempfile
 import uuid
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSettings, QTimer, Qt
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QInputDialog,
@@ -31,7 +31,7 @@ HSL_COLORS = ("Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Mag
 HSL = [(f"HueAdjustment{c}", f"{c} Hue", -100, 100, 1, 0) for c in HSL_COLORS] + [(f"SaturationAdjustment{c}", f"{c} Saturation", -100, 100, 1, 0) for c in HSL_COLORS] + [(f"LuminanceAdjustment{c}", f"{c} Luminance", -100, 100, 1, 0) for c in HSL_COLORS]
 DETAIL = [("SharpenRadius", "Sharpen Radius", .5, 3, .1, 1), ("SharpenDetail", "Sharpen Detail", 0, 100, 1, 0), ("SharpenEdgeMasking", "Masking", 0, 100, 1, 0), ("LuminanceSmoothing", "Luminance Noise Reduction", 0, 100, 1, 0), ("ColorNoiseReduction", "Color Noise Reduction", 0, 100, 1, 0)]
 EFFECTS = [("PostCropVignetteAmount", "Post-Crop Vignette", -100, 100, 1, 0), ("GrainAmount", "Grain Amount", 0, 100, 1, 0), ("GrainSize", "Grain Size", 0, 100, 1, 0), ("GrainFrequency", "Grain Roughness", 0, 100, 1, 0)]
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.2.1"
 
 
 class BatchMetadataDialog(QDialog):
@@ -57,6 +57,25 @@ class BatchMetadataDialog(QDialog):
 
     def values(self) -> dict[str, str]:
         return {label: field.text() for label, (enabled, field) in self.fields.items() if enabled.isChecked()}
+
+
+class SettingsDialog(QDialog):
+    def __init__(self, settings: QSettings, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Beállítások")
+        layout = QVBoxLayout(self); form = QFormLayout()
+        self.backup = QCheckBox("Készítsen .bak másolatot felülíráskor")
+        self.backup.setChecked(settings.value("backup_on_overwrite", True, type=bool))
+        self.startup_update = QCheckBox("Frissítések ellenőrzése indításkor")
+        self.startup_update.setChecked(settings.value("check_updates_on_startup", False, type=bool))
+        self.release_folder = QLineEdit(settings.value("release_folder", "", type=str))
+        self.release_folder.setPlaceholderText("Minden műveletnél rákérdez")
+        form.addRow("Biztonsági mentés:", self.backup)
+        form.addRow("Frissítés:", self.startup_update)
+        form.addRow("Alapértelmezett kiadási mappa:", self.release_folder)
+        layout.addLayout(form)
+        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept); buttons.rejected.connect(self.reject); layout.addWidget(buttons)
 
 
 class CompareDialog(QDialog):
@@ -100,6 +119,7 @@ class CompareDialog(QDialog):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        self.settings = QSettings()
         self.document: XmpDocument | None = None
         self.original_root = None
         self.history: list[object] = []
@@ -109,6 +129,8 @@ class MainWindow(QMainWindow):
         self.setAcceptDrops(True)
         self.resize(1200, 780)
         self._build_ui(); self._build_actions(); self.statusBar().showMessage("Készen áll – nyisson meg egy XMP presetet."); self.update_ui()
+        if self.settings.value("check_updates_on_startup", False, type=bool):
+            QTimer.singleShot(900, self.check_for_updates)
 
     def _build_ui(self):
         toolbar = QToolBar("Fő műveletek"); toolbar.setMovable(False); self.addToolBar(toolbar)
@@ -210,7 +232,7 @@ class MainWindow(QMainWindow):
         package=QAction("SPS kiadási csomag exportálása…",self); package.triggered.connect(self.export_package); menu.addAction(package)
         rename=QAction("Kötegelt átnevezési másolat…",self); rename.triggered.connect(self.batch_rename); menu.addAction(rename)
         report=QAction("Preset-jelentés exportálása…",self); report.triggered.connect(self.export_report); menu.addAction(report)
-        self.backup_action=QAction(".bak biztonsági másolat felülíráskor",self); self.backup_action.setCheckable(True); self.backup_action.setChecked(True); menu.addAction(self.backup_action)
+        self.backup_action=QAction(".bak biztonsági másolat felülíráskor",self); self.backup_action.setCheckable(True); self.backup_action.setChecked(self.settings.value("backup_on_overwrite", True, type=bool)); self.backup_action.toggled.connect(lambda checked: self.settings.setValue("backup_on_overwrite", checked)); menu.addAction(self.backup_action)
         edit=self.menuBar().addMenu("Szerkesztés"); edit.addAction(self.undo_action); edit.addAction(self.redo_action)
         reset=QAction("Eredeti értékek visszaállítása",self); reset.triggered.connect(self.restore_original); edit.addAction(reset)
         tools=self.menuBar().addMenu("Eszközök"); compare=QAction("Preset összehasonlítás…",self); compare.triggered.connect(self.compare); tools.addAction(compare)
@@ -221,6 +243,7 @@ class MainWindow(QMainWindow):
         template_import=QAction("Metaadat-sablon alkalmazása…",self); template_import.triggered.connect(self.import_template); tools.addAction(template_import)
         help_menu=self.menuBar().addMenu("Súgó")
         check_update=QAction("Frissítések keresése…",self); check_update.triggered.connect(self.check_for_updates); help_menu.addAction(check_update)
+        preferences=QAction("Beállítások…",self); preferences.triggered.connect(self.show_settings); help_menu.addAction(preferences)
 
     def select_page(self,index):
         self.pages.setCurrentIndex(index)
@@ -229,6 +252,41 @@ class MainWindow(QMainWindow):
     def choose_xmp_files(self, title: str) -> list[str]:
         paths, _ = QFileDialog.getOpenFileNames(self, title, "", "XMP preset (*.xmp)")
         return paths
+
+    def release_destination(self, title: str) -> str:
+        preferred = self.settings.value("release_folder", "", type=str)
+        if preferred and Path(preferred).is_dir():
+            return preferred
+        return QFileDialog.getExistingDirectory(self, title)
+
+    @staticmethod
+    def available_target(folder: str | Path, name: str, reserved: set[Path] | None = None) -> Path:
+        """Never silently overwrite an existing batch-export result."""
+        candidate = Path(folder) / name
+        if reserved is None:
+            reserved = set()
+        if not candidate.exists() and candidate not in reserved:
+            return candidate
+        index = 1
+        while True:
+            alternative = candidate.with_name(f"{candidate.stem}_{index:02d}{candidate.suffix}")
+            if not alternative.exists() and alternative not in reserved:
+                return alternative
+            index += 1
+
+    def show_settings(self):
+        dialog = SettingsDialog(self.settings, self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        folder = dialog.release_folder.text().strip()
+        if folder and not Path(folder).is_dir():
+            QMessageBox.warning(self, "Beállítások", "Az alapértelmezett kiadási mappa nem létezik.")
+            return
+        self.settings.setValue("backup_on_overwrite", dialog.backup.isChecked())
+        self.settings.setValue("check_updates_on_startup", dialog.startup_update.isChecked())
+        self.settings.setValue("release_folder", folder)
+        self.backup_action.setChecked(dialog.backup.isChecked())
+        self.statusBar().showMessage("Beállítások mentve.")
 
     def check_for_updates(self):
         self.statusBar().showMessage("Frissítések keresése a GitHubon…")
@@ -311,16 +369,23 @@ class MainWindow(QMainWindow):
         dialog = BatchMetadataDialog(self)
         if dialog.exec() != QDialog.Accepted or not dialog.values():
             return
-        destination = QFileDialog.getExistingDirectory(self, "Kiadási mappa kiválasztása")
+        destination = self.release_destination("Kiadási mappa kiválasztása")
         if not destination:
             return
-        values, saved, failures = dialog.values(), [], []
+        values, saved, failures, targets, reserved = dialog.values(), [], [], [], set()
         for path in paths:
+            source_name = Path(path).name
+            target = self.available_target(destination, source_name if source_name.startswith("SPS_") else f"SPS_{source_name}", reserved)
+            reserved.add(target); targets.append((path, target))
+        preview = "\n".join(f"{Path(path).name} → {target.name}" for path, target in targets[:20])
+        if len(targets) > 20: preview += f"\n… és további {len(targets) - 20} fájl"
+        fields = ", ".join(values)
+        if QMessageBox.question(self, "Kötegelt módosítás előnézete", f"Módosuló metaadatok: {fields}\n\nCélfájlok:\n{preview}\n\nFolytatod?", QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+            return
+        for path, target in targets:
             try:
                 document = XmpDocument.open(path)
                 document.apply_metadata_template(values)
-                source_name = Path(path).name
-                target = Path(destination) / (source_name if source_name.startswith("SPS_") else f"SPS_{source_name}")
                 document.save_as(target); saved.append(target.name)
             except XmpError as exc:
                 failures.append(f"{Path(path).name}: {exc}")
@@ -332,12 +397,12 @@ class MainWindow(QMainWindow):
         paths = self.choose_xmp_files("Presetek kiválasztása az SPS csomaghoz")
         if not paths:
             return
-        destination = QFileDialog.getExistingDirectory(self, "SPS kiadási mappa")
+        destination = self.release_destination("SPS kiadási mappa")
         if not destination:
             return
-        copied, failures = [], []
+        copied, failures, reserved = [], [], set()
         for path in paths:
-            source = Path(path); target = Path(destination) / (source.name if source.name.startswith("SPS_") else f"SPS_{source.name}")
+            source = Path(path); target = self.available_target(destination, source.name if source.name.startswith("SPS_") else f"SPS_{source.name}", reserved); reserved.add(target)
             try:
                 shutil.copy2(source, target); copied.append(target.name)
             except OSError as exc:
@@ -356,13 +421,13 @@ class MainWindow(QMainWindow):
         replacement, ok = QInputDialog.getText(self, "Kötegelt átnevezés", "Új szöveg:")
         if not ok:
             return
-        destination = QFileDialog.getExistingDirectory(self, "Új nevű másolatok mappája")
+        destination = self.release_destination("Új nevű másolatok mappája")
         if not destination:
             return
-        copied = 0
+        copied, reserved = 0, set()
         for path in paths:
             source = Path(path); name = source.name.replace(find, replacement) if find else source.name
-            target = Path(destination) / (name if name.startswith("SPS_") else f"SPS_{name}")
+            target = self.available_target(destination, name if name.startswith("SPS_") else f"SPS_{name}", reserved); reserved.add(target)
             try:
                 shutil.copy2(source, target); copied += 1
             except OSError as exc:

@@ -6,6 +6,9 @@ Minden érdemi változás ebben a fájlban követhető.
 
 ### [New]
 
+- Tartós beállítások a biztonsági mentéshez, az indításkori frissítéskereséshez és az alapértelmezett kiadási mappához.
+- Kötegelt metaadat-módosítás mentés előtti fájlonkénti előnézete.
+- Ütközésmentes kötegelt export: létező név esetén automatikus `_01`, `_02` utótag.
 - Kötegelt, biztonságos metaadat-szerkesztés és `SPS_` kiadási másolatkészítés.
 - Mentés előtti változáslista, XMP-diagnosztika és választható `.bak` biztonsági mentés.
 - Metaadat-sablonok JSON import/exportja, CSV/JSON presetjelentés és kötegelt átnevezési másolat.
@@ -14,7 +17,7 @@ Minden érdemi változás ebben a fájlban követhető.
 
 ### [Updated]
 
-- NSIS telepítő verziója 0.2.0-ra frissítve az új szerkesztőfunkciókkal.
+- Alkalmazás- és telepítőverzió 0.2.1.
 
 ## 2026-09-04
 
